@@ -1,0 +1,50 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files — NEVER commit real secrets
+.env
+.env*.local
+.env.production
+
+# prisma
+/prisma/dev.db
+/prisma/*.db-journal
+
+# local postgres data (used only for local testing)
+/.localdb/
+
+# typescript
+*.tsbuildinfo
+
+# vercel
+.vercel
+
+# uploads (local dev file storage)
+/uploads
+
+# local test / debug scratch (not part of the app)
+/.e2e.mjs
+/.dbg*.mjs
+/.check.mjs
+/.reset.mjs
+/*.log
+/.e2e.out

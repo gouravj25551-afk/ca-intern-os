@@ -1,0 +1,434 @@
+// CA Intern OS — Prisma schema
+// Relational model connecting Clients across Audit, GST, Compliance and Knowledge.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(ADMIN)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  clients        Client[]
+  preparedPapers WorkingPaper[]  @relation("PreparedBy")
+  reviewedPapers WorkingPaper[]  @relation("ReviewedBy")
+  reconciliations GSTReconciliation[]
+  activities     ActivityLog[]
+  favorites      KnowledgeFavorite[]
+
+  @@index([email])
+}
+
+// ---------------------------------------------------------------------------
+// Clients — the central relationship between all modules
+// ---------------------------------------------------------------------------
+
+enum EntityType {
+  PROPRIETORSHIP
+  PARTNERSHIP
+  LLP
+  PRIVATE_LIMITED
+  PUBLIC_LIMITED
+  HUF
+  TRUST
+  SOCIETY
+  AOP
+  OTHER
+}
+
+model Client {
+  id            String     @id @default(cuid())
+  name          String
+  entityType    EntityType @default(PRIVATE_LIMITED)
+  financialYear String     // e.g. "2024-25"
+  gstin         String?
+  pan           String?
+  contactPerson String?
+  email         String?
+  phone         String?
+  notes         String?    @db.Text
+  isSample      Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  ownerId String?
+  owner   User?   @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  audits          Audit[]
+  complianceTasks ComplianceTask[]
+  reconciliations GSTReconciliation[]
+  attachments     Attachment[]
+
+  @@index([name])
+  @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit Working Paper Manager
+// ---------------------------------------------------------------------------
+
+model Audit {
+  id            String   @id @default(cuid())
+  title         String   // e.g. "Statutory Audit FY 2024-25"
+  financialYear String
+  auditType     String   @default("Statutory Audit")
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  workingPapers WorkingPaper[]
+
+  @@index([clientId])
+}
+
+enum WorkingPaperStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  PREPARED
+  REVIEW_PENDING
+  REVIEWED
+  CLOSED
+}
+
+enum ReviewStatus {
+  NOT_REVIEWED
+  REVIEW_PENDING
+  REVIEWED
+  REOPENED
+}
+
+// Standard audit areas plus CUSTOM for user-created working papers.
+enum AuditArea {
+  CASH_AND_BANK
+  SALES
+  PURCHASES
+  TRADE_RECEIVABLES
+  TRADE_PAYABLES
+  FIXED_ASSETS
+  LOANS_AND_BORROWINGS
+  EXPENSES
+  PAYROLL
+  STATUTORY_DUES
+  OTHER
+  CUSTOM
+}
+
+model WorkingPaper {
+  id               String             @id @default(cuid())
+  reference        String?            // e.g. "WP-A-1"
+  title            String
+  area             AuditArea          @default(OTHER)
+  customAreaName   String?            // when area == CUSTOM
+  status           WorkingPaperStatus @default(NOT_STARTED)
+  reviewStatus     ReviewStatus       @default(NOT_REVIEWED)
+  objective        String?            @db.Text
+  workPerformed    String?            @db.Text
+  findings         String?            @db.Text
+  reviewerNotes    String?            @db.Text
+  requiredDocuments String?           @db.Text // newline-separated list
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  auditId String
+  audit   Audit  @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  preparedById String?
+  preparedBy   User?   @relation("PreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
+
+  reviewedById String?
+  reviewedBy   User?   @relation("ReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  checklist   WorkingPaperChecklistItem[]
+  attachments Attachment[]
+
+  @@index([auditId])
+  @@index([status])
+  @@index([area])
+}
+
+model WorkingPaperChecklistItem {
+  id        String   @id @default(cuid())
+  text      String
+  isChecked Boolean  @default(false)
+  remarks   String?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  workingPaperId String
+  workingPaper   WorkingPaper @relation(fields: [workingPaperId], references: [id], onDelete: Cascade)
+
+  @@index([workingPaperId])
+}
+
+// ---------------------------------------------------------------------------
+// Attachments (metadata only in V1 — files stored on disk/local, access-gated)
+// ---------------------------------------------------------------------------
+
+model Attachment {
+  id           String   @id @default(cuid())
+  fileName     String
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String   // relative path under the private uploads dir
+  createdAt    DateTime @default(now())
+
+  clientId       String?
+  client         Client?       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  workingPaperId String?
+  workingPaper   WorkingPaper? @relation(fields: [workingPaperId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([workingPaperId])
+}
+
+// ---------------------------------------------------------------------------
+// GST Reconciliation
+// ---------------------------------------------------------------------------
+
+model GSTReconciliation {
+  id        String   @id @default(cuid())
+  title     String
+  period    String?  // e.g. "2024-25" or "Apr-2024"
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  bookEntries GSTBookEntry[]
+  b2bEntries  GST2BEntry[]
+  results     GSTMatchResult[]
+
+  @@index([clientId])
+}
+
+model GSTBookEntry {
+  id           String   @id @default(cuid())
+  gstin        String?
+  gstinNorm    String?  // normalized (uppercase, trimmed)
+  vendorName   String?
+  invoiceNo    String?
+  invoiceNoNorm String?
+  invoiceDate  DateTime?
+  taxableValue Float    @default(0)
+  igst         Float    @default(0)
+  cgst         Float    @default(0)
+  sgst         Float    @default(0)
+  totalTax     Float    @default(0)
+  rowIndex     Int      @default(0)
+
+  reconciliationId String
+  reconciliation   GSTReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@index([reconciliationId])
+  @@index([gstinNorm])
+}
+
+model GST2BEntry {
+  id            String   @id @default(cuid())
+  gstin         String?
+  gstinNorm     String?
+  vendorName    String?
+  invoiceNo     String?
+  invoiceNoNorm String?
+  invoiceDate   DateTime?
+  taxableValue  Float    @default(0)
+  igst          Float    @default(0)
+  cgst          Float    @default(0)
+  sgst          Float    @default(0)
+  totalTax      Float    @default(0)
+  rowIndex      Int      @default(0)
+
+  reconciliationId String
+  reconciliation   GSTReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@index([reconciliationId])
+  @@index([gstinNorm])
+}
+
+enum MatchStatus {
+  EXACT_MATCH
+  AMOUNT_MISMATCH
+  INVOICE_NUMBER_MISMATCH
+  GSTIN_MISMATCH
+  DATE_MISMATCH
+  TAX_MISMATCH
+  MISSING_IN_2B
+  MISSING_IN_BOOKS
+  DUPLICATE
+}
+
+model GSTMatchResult {
+  id            String      @id @default(cuid())
+  status        MatchStatus
+  reason        String      @db.Text // explainable "why" text
+  gstin         String?
+  vendorName    String?
+  invoiceNo     String?
+  invoiceDate   DateTime?
+
+  bookTaxable   Float?
+  bookTax       Float?
+  b2bTaxable    Float?
+  b2bTax        Float?
+  taxDifference Float?      // book - 2b (total tax)
+
+  bookEntryId   String?
+  b2bEntryId    String?
+
+  reconciliationId String
+  reconciliation   GSTReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@index([reconciliationId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Compliance Calendar
+// ---------------------------------------------------------------------------
+
+enum ComplianceType {
+  GST
+  TDS
+  INCOME_TAX
+  ROC
+  AUDIT
+  ADVANCE_TAX
+  OTHER
+}
+
+enum ComplianceStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model ComplianceTask {
+  id             String           @id @default(cuid())
+  title          String
+  type           ComplianceType   @default(OTHER)
+  period         String?          // e.g. "Apr-2024", "Q1 FY24-25", "FY 2024-25"
+  dueDate        DateTime
+  assignedTo     String?
+  status         ComplianceStatus @default(PENDING)
+  priority       Priority         @default(MEDIUM)
+  notes          String?          @db.Text
+  completedAt    DateTime?
+  isSample       Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([dueDate])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge base
+// ---------------------------------------------------------------------------
+
+model KnowledgeCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  articles KnowledgeArticle[]
+}
+
+model KnowledgeArticle {
+  id            String   @id @default(cuid())
+  title         String
+  slug          String   @unique
+  description   String?  @db.Text
+  content       String?  @db.Text
+  checklist     String?  @db.Text // newline-separated
+  commonDocuments String? @db.Text
+  reviewPoints  String?  @db.Text
+  notes         String?  @db.Text
+  reference     String?  // source/reference
+  viewCount     Int      @default(0)
+  lastViewedAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  categoryId String
+  category   KnowledgeCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  favorites KnowledgeFavorite[]
+
+  @@index([categoryId])
+  @@index([title])
+}
+
+model KnowledgeFavorite {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articleId String
+  article   KnowledgeArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Activity log
+// ---------------------------------------------------------------------------
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  action     String   // e.g. "client.created"
+  entityType String   // "Client" | "WorkingPaper" | ...
+  entityId   String?
+  summary    String
+  createdAt  DateTime @default(now())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId])
+}
