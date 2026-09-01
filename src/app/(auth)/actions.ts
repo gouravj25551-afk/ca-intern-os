@@ -10,6 +10,7 @@ import {
   userCount,
 } from '@/lib/auth';
 import { logActivity } from '@/lib/activity';
+import { ensureKnowledgeSeeded } from '@/lib/knowledge-bootstrap';
 
 export type ActionState = { ok: boolean; error?: string };
 
@@ -97,6 +98,10 @@ export async function setupAdminAction(
       role: 'ADMIN',
     },
   });
+
+  // Populate the knowledge base on first run so a fresh deploy is complete
+  // without any manual seed step. Idempotent + best-effort.
+  await ensureKnowledgeSeeded();
 
   await setSessionCookie({
     sub: user.id,
